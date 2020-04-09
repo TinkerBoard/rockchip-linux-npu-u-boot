@@ -56,6 +56,16 @@ static inline bool dev_of_valid(struct udevice *dev)
 int dev_read_u32_default(struct udevice *dev, const char *propname, int def);
 
 /**
+ * dev_read_s32_default() - read a signed 32-bit integer from a device's DT property
+ *
+ * @dev:	device to read DT property from
+ * @propname:	name of the property to read from
+ * @def:	default value to return if the property has no value
+ * @return property value, or @def if not found
+ */
+int dev_read_s32_default(struct udevice *dev, const char *propname, int def);
+
+/**
  * dev_read_string() - Read a string from a device's DT property
  *
  * @dev:	device to read DT property from
@@ -340,6 +350,25 @@ int dev_read_alias_seq(struct udevice *dev, int *devnump);
  */
 int dev_read_u32_array(struct udevice *dev, const char *propname,
 		       u32 *out_values, size_t sz);
+
+/**
+ * dev_write_u32_array() - Find and write an array of 32 bit integers
+ *
+ * Search for a property in a device node and write 32-bit value(s) to
+ * it.
+ *
+ * The out_values is modified only if a valid u32 value can be decoded.
+ *
+ * @dev: device to look up
+ * @propname:	name of the property to read
+ * @values:	pointer to update value, modified only if return value is 0
+ * @sz:		number of array elements to read
+ * @return 0 on success, -EINVAL if the property does not exist, -ENODATA if
+ * property does not have a value, and -EOVERFLOW if the property data isn't
+ * large enough.
+ */
+int dev_write_u32_array(struct udevice *dev, const char *propname,
+			u32 *values, size_t sz);
 
 /**
  * dev_read_first_subnode() - find the first subnode of a device's node

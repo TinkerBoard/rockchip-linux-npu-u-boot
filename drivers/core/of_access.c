@@ -485,6 +485,25 @@ int of_read_u32_array(const struct device_node *np, const char *propname,
 	return 0;
 }
 
+int of_write_u32_array(const struct device_node *np, const char *propname,
+		       u32 *values, size_t sz)
+{
+	__be32 *val;
+
+	debug("%s: %s: ", __func__, propname);
+	val = of_find_property_value_of_size(np, propname,
+					     sz * sizeof(*values));
+
+	if (IS_ERR(val))
+		return PTR_ERR(val);
+
+	debug("size %zd\n", sz);
+	while (sz--)
+		*val++ = cpu_to_be32p(values++);
+
+	return 0;
+}
+
 int of_property_match_string(const struct device_node *np, const char *propname,
 			     const char *string)
 {
@@ -832,9 +851,11 @@ struct device_node *of_alias_dump(void)
 
 	mutex_lock(&of_mutex);
 	list_for_each_entry(app, &aliases_lookup, link) {
-		printf("%s: Alias %s%d: %s, phandle=%d\n", __func__,
+		printf("%10s%d: %20s, phandle=%d %4s\n",
 		       app->stem, app->id,
-		       app->np->full_name, app->np->phandle);
+		       app->np->full_name, app->np->phandle,
+		       of_get_property(app->np, "u-boot,dm-pre-reloc", NULL) ||
+		       of_get_property(app->np, "u-boot,dm-spl", NULL) ? "*" : "");
 	}
 	mutex_unlock(&of_mutex);
 

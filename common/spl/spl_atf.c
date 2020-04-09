@@ -80,7 +80,18 @@ bl33_setup:
 	bl33_ep_info->pc = bl33_entry;
 	bl33_ep_info->spsr = SPSR_64(MODE_EL2, MODE_SP_ELX,
 				     DISABLE_ALL_EXECPTIONS);
-
+#if defined(CONFIG_SPL_KERNEL_BOOT) && defined(CONFIG_ARM64)
+	/*
+	 * Reference: arch/arm/lib/bootm.c
+	 * boot_jump_linux(bootm_headers_t *images, int flag)
+	 * {
+	 * 	......
+	 * 	armv8_switch_to_el2((u64)images->ft_addr, 0, 0, 0,
+	 * 			   images->ep, ES_TO_AARCH64);
+	 * }
+	 */
+	bl33_ep_info->args.arg0 = CONFIG_SPL_FDT_ADDR;
+#endif
 	bl2_to_bl31_params->bl33_image_info = &bl31_params_mem.bl33_image_info;
 	SET_PARAM_HEAD(bl2_to_bl31_params->bl33_image_info,
 		       ATF_PARAM_IMAGE_BINARY, ATF_VERSION_1, 0);
@@ -95,8 +106,8 @@ static inline void raw_write_daif(unsigned int daif)
 
 typedef void (*atf_entry_t)(struct bl31_params *params, void *plat_params);
 
-static void bl31_entry(uintptr_t bl31_entry, uintptr_t bl32_entry,
-		       uintptr_t bl33_entry, uintptr_t fdt_addr)
+void bl31_entry(uintptr_t bl31_entry, uintptr_t bl32_entry,
+		uintptr_t bl33_entry, uintptr_t fdt_addr)
 {
 	struct bl31_params *bl31_params;
 	atf_entry_t  atf_entry = (atf_entry_t)bl31_entry;
@@ -104,7 +115,19 @@ static void bl31_entry(uintptr_t bl31_entry, uintptr_t bl32_entry,
 	bl31_params = bl2_plat_get_bl31_params(bl32_entry, bl33_entry);
 
 	raw_write_daif(SPSR_EXCEPTION_MASK);
+
+	/*
+	 * Turn off I-cache and invalidate it
+	 */
+	icache_disable();
+	invalidate_icache_all();
+
+	/*
+	 * turn off D-cache
+	 * dcache_disable() in turn flushes the d-cache and disables MMU
+	 */
 	dcache_disable();
+	invalidate_dcache_all();
 
 	atf_entry((void *)bl31_params, (void *)fdt_addr);
 }
@@ -152,15 +175,22 @@ uintptr_t spl_fit_images_get_entry(void *blob, int node)
 
 void spl_invoke_atf(struct spl_image_info *spl_image)
 {
-	uintptr_t  bl32_entry = -1;
-	uintptr_t  bl33_entry = CONFIG_SYS_TEXT_BASE;
+	uintptr_t bl32_entry, bl33_entry;
 	void *blob = spl_image->fdt_addr;
 	uintptr_t platform_param = (uintptr_t)blob;
 	int node;
 
+	/*
+	 * Find the OP-TEE binary (in /fit-images) load address or
+	 * entry point (if different) and pass it as the BL3-2 entry
+	 * point, this is optional.
+	 * This will need to be extended to support Falcon mode.
+	 */
 	node = spl_fit_images_find(blob, IH_OS_OP_TEE);
 	if (node >= 0)
 		bl32_entry = spl_fit_images_get_entry(blob, node);
+	else
+		bl32_entry = spl_image->entry_point_bl32; /* optional */
 
 	/*
 	 * Find the U-Boot binary (in /fit-images) load addreess or
@@ -168,10 +198,11 @@ void spl_invoke_atf(struct spl_image_info *spl_image)
 	 * point.
 	 * This will need to be extended to support Falcon mode.
 	 */
-
 	node = spl_fit_images_find(blob, IH_OS_U_BOOT);
 	if (node >= 0)
 		bl33_entry = spl_fit_images_get_entry(blob, node);
+	else
+		bl33_entry = spl_image->entry_point_bl33;
 
 	/*
 	 * If ATF_NO_PLATFORM_PARAM is set, we override the platform

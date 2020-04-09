@@ -127,7 +127,7 @@ static int get_public_phy(struct display_state *state,
 		}
 		conn_state->phy = phy;
 
-		printf("inno hdmi phy init success, save it\n");
+		debug("inno hdmi phy init success, save it\n");
 		data->phy_drv = conn_state->phy;
 		data->phy_init = true;
 		return 0;
@@ -142,7 +142,7 @@ static void init_display_buffer(ulong base)
 	memory_end = memory_start;
 }
 
-static void *get_display_buffer(int size)
+void *get_display_buffer(int size)
 {
 	unsigned long roundup_memory = roundup(memory_end, PAGE_SIZE);
 	void *buf;
@@ -163,7 +163,7 @@ static unsigned long get_display_size(void)
 	return memory_end - memory_start;
 }
 
-static bool can_direct_logo(int bpp)
+bool can_direct_logo(int bpp)
 {
 	return bpp == 24 || bpp == 32;
 }
@@ -179,7 +179,7 @@ static int connector_phy_init(struct display_state *state,
 	if (type == INNO_HDMI_PHY) {
 		/* there is no public phy was initialized */
 		if (!data->phy_init) {
-			printf("start get public phy\n");
+			debug("start get public phy\n");
 			data->public_phy_type = type;
 			if (get_public_phy(state, data)) {
 				printf("can't find correct public phy type\n");
@@ -294,6 +294,9 @@ static int display_get_timing_from_dts(struct panel_state *panel_state,
 		return -ENXIO; \
 	}
 
+#define FDT_GET_INT_DEFAULT(val, name, default) \
+	val = ofnode_read_s32_default(native_mode, name, default);
+
 	FDT_GET_INT(hactive, "hactive");
 	FDT_GET_INT(vactive, "vactive");
 	FDT_GET_INT(pixelclock, "clock-frequency");
@@ -310,6 +313,15 @@ static int display_get_timing_from_dts(struct panel_state *panel_state,
 	FDT_GET_INT(val, "pixelclk-active");
 	flags |= val ? DRM_MODE_FLAG_PPIXDATA : 0;
 
+	FDT_GET_INT_DEFAULT(val, "screen-rotate", 0);
+	if (val == DRM_MODE_FLAG_XMIRROR) {
+		flags |= DRM_MODE_FLAG_XMIRROR;
+	} else if (val == DRM_MODE_FLAG_YMIRROR) {
+		flags |= DRM_MODE_FLAG_YMIRROR;
+	} else if (val == DRM_MODE_FLAG_XYMIRROR) {
+		flags |= DRM_MODE_FLAG_XMIRROR;
+		flags |= DRM_MODE_FLAG_YMIRROR;
+	}
 	mode->hdisplay = hactive;
 	mode->hsync_start = mode->hdisplay + hfront_porch;
 	mode->hsync_end = mode->hsync_start + hsync_len;
@@ -548,7 +560,7 @@ static int display_init(struct display_state *state)
 		printf("hdmi plugin ,skip tve\n");
 		goto deinit;
 	}
-#elif defined(CONFIG_ROCKCHIP_DRM_RK1000)
+#elif defined(CONFIG_DRM_ROCKCHIP_RK1000)
 	if (crtc->hdmi_hpd && conn_state->type == DRM_MODE_CONNECTOR_LVDS) {
 		printf("hdmi plugin ,skip tve\n");
 		goto deinit;
@@ -556,7 +568,7 @@ static int display_init(struct display_state *state)
 #endif
 	if (conn_funcs->detect) {
 		ret = conn_funcs->detect(state);
-#if defined(CONFIG_ROCKCHIP_DRM_TVE) || defined(CONFIG_ROCKCHIP_DRM_RK1000)
+#if defined(CONFIG_ROCKCHIP_DRM_TVE) || defined(CONFIG_DRM_ROCKCHIP_RK1000)
 		if (conn_state->type == DRM_MODE_CONNECTOR_HDMIA)
 			crtc->hdmi_hpd = ret;
 #endif
@@ -574,6 +586,8 @@ static int display_init(struct display_state *state)
 						&bpc);
 			if (!ret)
 				edid_print_info((void *)&conn_state->edid);
+		} else {
+			ret = video_bridge_get_timing(conn_state->bridge->dev);
 		}
 	} else if (conn_funcs->get_timing) {
 		ret = conn_funcs->get_timing(state);
@@ -911,9 +925,9 @@ static int load_kernel_bmp_logo(struct logo_info *logo, const char *bmp_name)
 	}
 
 	logo->mem = dst;
+#endif
 
 	return 0;
-#endif
 }
 
 static int load_bmp_logo(struct logo_info *logo, const char *bmp_name)
@@ -1035,37 +1049,43 @@ void rockchip_show_fbbase(ulong fbbase)
 	}
 }
 
-void rockchip_show_bmp(const char *bmp)
+int rockchip_show_bmp(const char *bmp)
 {
 	struct display_state *s;
+	int ret = 0;
 
 	if (!bmp) {
 		list_for_each_entry(s, &rockchip_display_list, head)
 			display_disable(s);
-		return;
+		return -ENOENT;
 	}
 
 	list_for_each_entry(s, &rockchip_display_list, head) {
 		s->logo.mode = s->charge_logo_mode;
 		if (load_bmp_logo(&s->logo, bmp))
 			continue;
-		display_logo(s);
+		ret = display_logo(s);
 	}
+
+	return ret;
 }
 
-void rockchip_show_logo(void)
+int rockchip_show_logo(void)
 {
 	struct display_state *s;
+	int ret = 0;
 
 	list_for_each_entry(s, &rockchip_display_list, head) {
 		s->logo.mode = s->logo_mode;
 		if (load_bmp_logo(&s->logo, s->ulogo_name))
 			printf("failed to display uboot logo\n");
 		else
-			display_logo(s);
+			ret = display_logo(s);
 
 		/* Load kernel bmp in rockchip_display_fixup() later */
 	}
+
+	return ret;
 }
 
 enum {
@@ -1366,6 +1386,9 @@ static int rockchip_display_probe(struct udevice *dev)
 
 		get_crtc_mcu_mode(&s->crtc_state);
 
+		ret = ofnode_read_u32_default(s->crtc_state.node,
+					      "rockchip,dual-channel-swap", 0);
+		s->crtc_state.dual_channel_swap = ret;
 		if (connector_panel_init(s)) {
 			printf("Warn: Failed to init panel drivers\n");
 			free(s);
@@ -1479,6 +1502,7 @@ void rockchip_display_fixup(void *blob)
 		FDT_SET_U32("video,vrefresh",
 			    drm_mode_vrefresh(&s->conn_state.mode));
 		FDT_SET_U32("video,flags", s->conn_state.mode.flags);
+		FDT_SET_U32("video,aspect_ratio", s->conn_state.mode.picture_aspect_ratio);
 		FDT_SET_U32("overscan,left_margin", s->conn_state.overscan.left_margin);
 		FDT_SET_U32("overscan,right_margin", s->conn_state.overscan.right_margin);
 		FDT_SET_U32("overscan,top_margin", s->conn_state.overscan.top_margin);
