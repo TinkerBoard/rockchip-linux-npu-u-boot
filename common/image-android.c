@@ -415,8 +415,6 @@ static int android_image_separate(struct andr_img_hdr *hdr,
 				  void *load_address,
 				  void *ram_base)
 {
-	char *initrd_high;
-	char *fdt_high;
 	ulong bstart;
 
 	if (android_image_check_header(hdr)) {
@@ -504,22 +502,8 @@ static int android_image_separate(struct andr_img_hdr *hdr,
 	}
 #endif
 
-	/*
-	 * 2. Disable fdt/ramdisk relocation, it saves boot time.
-	 */
-	initrd_high = env_get("initrd_high");
-	fdt_high = env_get("fdt_high");
-
-	if (!fdt_high) {
-		env_set_hex("fdt_high", -1UL);
-		printf("Fdt ");
-	}
-	if (!initrd_high) {
-		env_set_hex("initrd_high", -1UL);
-		printf("Ramdisk ");
-	}
-	if (!fdt_high || !initrd_high)
-		printf("skip relocation\n");
+	/* 2. Disable fdt/ramdisk relocation, it saves boot time */
+	env_set("bootm-no-reloc", "y");
 
 	return 0;
 }
@@ -551,27 +535,38 @@ int android_image_parse_comp(struct andr_img_hdr *hdr, ulong *load_addr)
 		} else {
 			printf("Warn: No \"kernel_addr_c\"\n");
 			comp_addr = CONFIG_SYS_SDRAM_BASE + 0x2000000;/* 32M */
-			env_set_ulong("kernel_addr_c", comp_addr);
+			env_set_hex("kernel_addr_c", comp_addr);
 		}
 
 		*load_addr = comp_addr - hdr->page_size;
 	}
 #else
 	/*
-	 * On 32-bit kernel, assuming use zImage by default.
+	 * On 32-bit kernel:
 	 *
-	 * kernel_addr_c is for LZ4/zImage but maybe not defined.
-	 * kernel_addr_r is for zImage when kernel_addr_c is not defined.
-	 * kernel_addr_r is for IMAGE when kernel_addr_c is defined.
+	 * The input load_addr is from env value: "kernel_addr_r", it has
+	 * different role depends on whether kernel_addr_c is defined:
+	 *
+	 * - kernel_addr_r is for lz4/zImage if kernel_addr_c if [not] defined.
+	 * - kernel_addr_r is for IMAGE if kernel_addr_c is defined.
 	 */
 	if (comp == IH_COMP_NONE) {
-		if (kernel_addr_c)
-			*load_addr = env_get_ulong("kernel_addr_r", 16, 0);
-		else
+		if (kernel_addr_c) {
+			/* input load_addr is for Image, nothing to do */
+		} else {
+			/* input load_addr is for lz4/zImage, set default addr for Image */
 			*load_addr = CONFIG_SYS_SDRAM_BASE + 0x8000;
+			env_set_hex("kernel_addr_r", *load_addr);
+
+			*load_addr -= hdr->page_size;
+		}
 	} else {
-		if (kernel_addr_c)
+		if (kernel_addr_c) {
+			/* input load_addr is for Image, so use another for lz4/zImage */
 			*load_addr = kernel_addr_c - hdr->page_size;
+		} else {
+			/* input load_addr is for lz4/zImage, nothing to do */
+		}
 	}
 #endif
 
